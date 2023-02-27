@@ -1,8 +1,8 @@
-set(target_name host_hid_to_device_cdc)
+set(target_name host_hid_to_device_hid)
 add_executable(${target_name})
 
 target_sources(${target_name} PRIVATE
- host_hid_to_device_cdc.c
+ host_hid_to_device_hid.c
  usb_descriptors.c
  # can use 'tinyusb_pico_pio_usb' library later when pico-sdk is updated
  ${PICO_TINYUSB_PATH}/src/portable/raspberrypi/pio_usb/dcd_pio_usb.c
