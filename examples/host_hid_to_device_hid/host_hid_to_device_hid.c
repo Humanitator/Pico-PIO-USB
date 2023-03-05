@@ -41,7 +41,6 @@ const uint8_t colemak[128] = {
 
 static uint8_t const keycode2ascii[128][2] =  { HID_KEYCODE_TO_ASCII };
 static uint8_t const ascii2keycode[128][2] =  { HID_ASCII_TO_KEYCODE };
-
 /*------------- MAIN -------------*/
 
 // core1: handle host events
@@ -279,25 +278,35 @@ static inline bool find_key_in_report(hid_keyboard_report_t const *report, uint8
   return false;
 }
 
-// "print" text with keyboard
-static void KeyText(uint8_t *text)
+static void KeyText(uint8_t *text, uint len)
 {
-  for (uint8_t i = 0; i < sizeof(text); i++)
+  int mt_streak = 0;
+  uint8_t mt[6] = {0}; // Empty packet
+
+  for (uint i = 0; i < len; i++)
   {
-    uint8_t ch = text[i];
-
     uint8_t modifier = 0;
-    uint8_t keycode[6] = { 0 };
+    uint8_t keycode[6] = {0};
+    
+    // Translate ascii to keycode
+    keycode[0] = ascii2keycode[text[i]][1];
 
-    if ( ascii2keycode[ch][0] ) modifier = KEYBOARD_MODIFIER_LEFTSHIFT;
-    keycode[0] = ascii2keycode[ch][1];
+    // Handle text end
+    if (text[i] == 0) { mt_streak++; } else { mt_streak = 0; }
+    if (mt_streak >= 20) { break; }
+
+    if ( ascii2keycode[text[i]][0] ) modifier = KEYBOARD_MODIFIER_LEFTSHIFT;
     send_hid_report(REPORT_ID_KEYBOARD, modifier, keycode);
-    sleep_ms(50);
+    sleep_ms(20);
+
+    // // Send empty, just to be sure
+    // send_hid_report(REPORT_ID_KEYBOARD, 0, mt);
+    // sleep_ms(20);
   }
 }
 
-// Text logging data
-static uint8_t loggedText[128];
+
+static uint8_t loggedText[1024] = { 0 };
 static int lastLog = -1;
 
 // convert hid keycode to ascii and print via usb device CDC (ignore non-printable)
@@ -305,13 +314,17 @@ static void process_kbd_report(uint8_t dev_addr, uint8_t instance, hid_keyboard_
 {
   (void) dev_addr;
   static hid_keyboard_report_t prev_report = { 0, 0, {0} }; // previous report to check key released
-  static uint8_t leds = 0;
+  // static uint8_t leds = 0;
+
+  uint8_t mt[6] = {0}; // empty keycode
 
   uint8_t keycode[6] = { 0 };
   uint8_t modifier = report->modifier;
 
   uint8_t charachters[6] = {0};
   uint8_t casedChars[6] = {0};
+
+  bool canLog = true;
 
   // Set keys
   for (uint8_t i = 0; i < 6; i++)
@@ -324,11 +337,15 @@ static void process_kbd_report(uint8_t dev_addr, uint8_t instance, hid_keyboard_
     casedChars[i] = keycode2ascii[kc][is_shift ? 1 : 0];
     charachters[i] = keycode2ascii[kc][0];
 
-    // Print saved buffer
-    if (charachters[0] == 'p' && charachters[1] == 'b' && is_shift && is_alt)
+    // Clear saved buffer
+    if (charachters[0] == 'c' && charachters[1] == 'a' && charachters[2] == 'l' && is_alt)
     {
-      modifier = 0;
-      KeyText(loggedText);
+      for (uint i = 0; i < sizeof(loggedText); i++)
+      {
+        loggedText[i] = 0;
+      }
+      lastLog = -1;
+      canLog = false;
 
       // Empty cased chars
       casedChars[0] = 0;
@@ -346,6 +363,46 @@ static void process_kbd_report(uint8_t dev_addr, uint8_t instance, hid_keyboard_
       keycode[4] = 0;
       keycode[5] = 0;
     }
+
+    // Print saved buffer
+    if (charachters[0] == 'p' && charachters[1] == 'a' && charachters[2] == 'l' && is_alt)
+    {
+      modifier = 0;
+
+      // Empty cased chars
+      casedChars[0] = 0;
+      casedChars[1] = 0;
+      casedChars[2] = 0;
+      casedChars[3] = 0;
+      casedChars[4] = 0;
+      casedChars[5] = 0;
+
+      // Empty keycode
+      keycode[0] = 0;
+      keycode[1] = 0;
+      keycode[2] = 0;
+      keycode[3] = 0;
+      keycode[4] = 0;
+      keycode[5] = 0;
+
+      // Clear shortcut keys
+      loggedText[lastLog - 2] = 0;
+      loggedText[lastLog - 1] = 0;
+      loggedText[lastLog] = 0;
+      canLog = false;
+
+      // Do a newline
+      keycode[0] = HID_KEY_ENTER;
+      send_hid_report(REPORT_ID_KEYBOARD, 0, keycode);
+      sleep_ms(20);
+      keycode[0] = 0;
+      send_hid_report(REPORT_ID_KEYBOARD, 0, keycode);
+      sleep_ms(20);
+
+      // Print logged text
+      KeyText(loggedText, sizeof(loggedText));
+    }
+
     //   else if (kc == HID_KEY_CAPS_LOCK) {
     //     leds ^= KEYBOARD_LED_CAPSLOCK;
     //     tuh_hid_set_report(dev_addr, instance, 0, HID_REPORT_TYPE_OUTPUT,
@@ -361,10 +418,41 @@ static void process_kbd_report(uint8_t dev_addr, uint8_t instance, hid_keyboard_
     //   }
   }
 
-  if (casedChars[0])
+  // Handle error
+  if (lastLog < ((int) sizeof(loggedText)) && canLog)
   {
     lastLog++;
-    loggedText[lastLog] = casedChars[0];
+    
+    // Log input
+    if (casedChars[0] && !casedChars[1])
+    {    
+      loggedText[lastLog] = casedChars[0];
+    } else if (casedChars[1] && !casedChars[2])
+    {
+      // lastLog++;
+      // loggedText[lastLog] = '|';
+      loggedText[lastLog] = casedChars[1];
+    } else if (casedChars[2] && !casedChars[3])
+    {
+      // lastLog++;
+      // loggedText[lastLog] = '|';
+      loggedText[lastLog] = casedChars[2];
+    } else if (casedChars[3] && !casedChars[4])
+    {
+      // lastLog++;
+      // loggedText[lastLog] = '|';
+      loggedText[lastLog] = casedChars[3];
+    } else if (casedChars[4])
+    {
+      // lastLog++;
+      // loggedText[lastLog] = '|';
+      loggedText[lastLog] = casedChars[4];
+    } else if (casedChars[5])
+    {
+      // lastLog++;
+      // loggedText[lastLog] = '|';
+      loggedText[lastLog] = casedChars[5];
+    }
   }
 
   // Send report
